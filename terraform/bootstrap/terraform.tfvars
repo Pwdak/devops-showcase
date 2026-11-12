@@ -1,2 +1,5 @@
-github_org  = "Pwdak"
-github_repo = "devops-showcase"
+github_org      = "Pwdak"
+github_repo     = "devops-showcase"
+github_owner_id = "127632950"
+github_repo_id  = "1455164669"
+aws_region      = "eu-west-1"

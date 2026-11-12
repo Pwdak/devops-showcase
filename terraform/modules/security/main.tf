@@ -47,7 +47,7 @@ resource "aws_security_group" "ec2" {
 
 resource "aws_vpc_security_group_ingress_rule" "ec2_from_alb" {
   security_group_id            = aws_security_group.ec2.id
-  description                  = "Port applicatif depuis l'ALB uniquement"
+  description                  = "Port applicatif depuis ALB uniquement"
   ip_protocol                  = "tcp"
   from_port                    = var.app_port
   to_port                      = var.app_port

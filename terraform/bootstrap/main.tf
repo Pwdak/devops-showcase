@@ -152,6 +152,14 @@ locals {
     ? aws_iam_openid_connect_provider.github[0].arn
     : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"
   )
+
+  # Nouveau format GitHub : repo:ORG@OWNER_ID/REPO@REPO_ID
+  # Ancien format (si les IDs ne sont pas fournis) : repo:ORG/REPO
+  github_subject_prefix = (
+    var.github_owner_id != "" && var.github_repo_id != ""
+    ? "repo:${var.github_org}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+    : "repo:${var.github_org}/${var.github_repo}"
+  )
 }
 
 data "aws_iam_policy_document" "github_trust" {
@@ -172,9 +180,9 @@ data "aws_iam_policy_document" "github_trust" {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/main",
-        "repo:${var.github_org}/${var.github_repo}:environment:production",
-        "repo:${var.github_org}/${var.github_repo}:pull_request",
+        "${local.github_subject_prefix}:ref:refs/heads/main",
+        "${local.github_subject_prefix}:environment:production",
+        "${local.github_subject_prefix}:pull_request",
       ]
     }
   }

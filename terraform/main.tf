@@ -58,9 +58,10 @@ module "security" {
 
 # 3. Calcul et base de données (ALB, ASG, RDS)
 module "compute_db" {
-  source       = "./modules/compute_db"
-  project_name = var.project_name
-  aws_region   = var.aws_region
+  source                   = "./modules/compute_db"
+  project_name             = var.project_name
+  aws_region               = var.aws_region
+  db_backup_retention_days = var.db_backup_retention_days
 
   vpc_id          = module.vpc.vpc_id
   public_subnets  = module.vpc.public_subnet_ids

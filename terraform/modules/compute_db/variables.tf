@@ -137,3 +137,9 @@ variable "log_retention_days" {
   type    = number
   default = 7
 }
+
+variable "db_backup_retention_days" {
+  description = "Jours de conservation des sauvegardes RDS"
+  type        = number
+  default     = 7
+}
