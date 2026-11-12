@@ -1,4 +1,4 @@
 # Copier vers backend.hcl (ignoré par Git) et adapter avec les sorties du bootstrap.
 bucket         = "devops-showcase-tfstate-123456789012"
-region         = "ca-central-1"
+region         = "eu-west-1"
 dynamodb_table = "devops-showcase-tf-lock"
