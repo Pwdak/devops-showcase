@@ -1,0 +1,46 @@
+name: Destroy infrastructure (manual)
+
+# À lancer après chaque démo pour stopper la facturation (NAT, ALB, RDS...).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Tapez "destroy" pour confirmer'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ca-central-1
+  TF_VERSION: "1.9.8"
+
+jobs:
+  destroy:
+    if: inputs.confirm == 'destroy'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform destroy
+        working-directory: terraform
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=devops-showcase-tf-lock"
+          terraform destroy -input=false -auto-approve \
+            -var "image_tag=destroy" \
+            -var "git_repo_url=${{ github.server_url }}/${{ github.repository }}.git"

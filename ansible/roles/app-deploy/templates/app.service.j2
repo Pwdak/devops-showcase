@@ -1,0 +1,30 @@
+# Géré par Ansible - rôle app-deploy
+[Unit]
+Description=DevOps Showcase application container
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+ExecStartPre=-/usr/bin/docker rm -f {{ app_container_name }}
+ExecStartPre=/bin/bash -c 'aws ecr get-login-password --region {{ aws_region }} | docker login --username AWS --password-stdin {{ ecr_registry }}'
+ExecStartPre=/usr/bin/docker pull {{ ecr_registry }}/{{ ecr_repository }}:{{ image_tag }}
+ExecStart=/usr/bin/docker run --name {{ app_container_name }} --init \
+  --publish {{ app_port }}:8080 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+  --log-driver awslogs \
+  --log-opt awslogs-region={{ aws_region }} \
+  --log-opt awslogs-group={{ app_log_group }} \
+  --env NODE_ENV=production \
+  --env APP_VERSION={{ image_tag }} \
+  --env AWS_REGION={{ aws_region }} \
+  --env DB_HOST={{ db_host }} \
+  --env DB_NAME={{ app_db_name }} \
+  --env DB_SECRET_ARN={{ db_secret_arn }} \
+  {{ ecr_registry }}/{{ ecr_repository }}:{{ image_tag }}
+ExecStop=/usr/bin/docker stop {{ app_container_name }}
+
+[Install]
+WantedBy=multi-user.target

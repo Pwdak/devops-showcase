@@ -1,0 +1,38 @@
+---
+- name: Validate required variables (passed by ansible-pull -e)
+  ansible.builtin.assert:
+    that:
+      - aws_region is defined
+      - ecr_registry is defined
+      - ecr_repository is defined
+      - image_tag is defined
+      - db_host is defined
+      - db_secret_arn is defined
+    fail_msg: "Missing required variable (see /etc/devops-showcase-vars.yml)"
+    quiet: true
+
+- name: Install the application systemd unit
+  ansible.builtin.template:
+    src: app.service.j2
+    dest: /etc/systemd/system/app.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart app
+
+- name: Enable and start the application service
+  ansible.builtin.systemd:
+    name: app.service
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait until the application answers on /health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ app_port }}/health"
+    status_code: 200
+  register: app_deploy_health
+  until: app_deploy_health.status == 200
+  retries: 24
+  delay: 5
+  changed_when: false

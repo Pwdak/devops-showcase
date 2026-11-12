@@ -1,0 +1,18 @@
+---
+# Playbook exécuté sur CHAQUE instance au démarrage via `ansible-pull`
+# (voir terraform/modules/compute_db/templates/user_data.sh.tpl).
+#
+# Pourquoi ansible-pull plutôt qu'un push SSH depuis le pipeline ?
+#   - Les instances sont privées (aucune IP publique, port 22 fermé).
+#   - L'Auto Scaling Group crée des instances à tout moment (panne, scale-out) :
+#     elles doivent se configurer seules, sans intervention du pipeline.
+- name: Configure application server and run the container
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: hardening
+    - role: docker-setup
+    - role: app-deploy

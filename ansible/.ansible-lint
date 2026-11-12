@@ -1,0 +1,3 @@
+# Le dossier de rôle "docker-setup" suit la structure du cahier des charges.
+skip_list:
+  - role-name

@@ -1,0 +1,30 @@
+---
+- name: Install Docker engine
+  ansible.builtin.dnf:
+    name: "{{ docker_packages }}"
+    state: present
+
+- name: Configure the Docker daemon (log rotation, live-restore)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" },
+        "live-restore": true
+      }
+  notify: Restart docker
+
+- name: Ensure Docker is enabled and running
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Check that the AWS CLI is available (needed for the ECR login)
+  ansible.builtin.command: aws --version
+  register: docker_setup_awscli
+  changed_when: false

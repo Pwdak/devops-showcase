@@ -1,0 +1,26 @@
+---
+- name: Harden the SSH daemon (drop-in configuration)
+  ansible.builtin.copy:
+    dest: "{{ hardening_ssh_config }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      # Géré par Ansible - rôle hardening
+      PermitRootLogin no
+      PasswordAuthentication no
+      PermitEmptyPasswords no
+      X11Forwarding no
+      MaxAuthTries 3
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+  notify: Restart sshd
+
+- name: Apply kernel network hardening (sysctl)
+  ansible.builtin.template:
+    src: sysctl-hardening.conf.j2
+    dest: /etc/sysctl.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl

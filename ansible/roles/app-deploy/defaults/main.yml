@@ -1,0 +1,5 @@
+---
+app_container_name: app
+app_port: 8080
+app_log_group: /devops-showcase/app
+app_db_name: appdb

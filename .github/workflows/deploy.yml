@@ -1,0 +1,252 @@
+name: CI/CD - Cloud-Native DevOps Showcase
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# OIDC : GitHub obtient des identifiants AWS temporaires (pas de clés statiques)
+permissions:
+  id-token: write
+  contents: read
+
+# Un seul déploiement à la fois ; on n'annule jamais un apply en cours
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ca-central-1
+  ECR_REPOSITORY: devops-showcase-app
+  TF_DIR: terraform
+  TF_VERSION: "1.9.8"
+  TF_LOCK_TABLE: devops-showcase-tf-lock
+
+jobs:
+  # ------------------------------------------------------------------ CI
+  validate:
+    name: Lint, tests & security scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Application
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install, lint and test the application
+        working-directory: app
+        run: |
+          npm ci
+          npm run lint
+          npm test
+
+      # --- Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_DIR }}
+
+      - name: Terraform validate (root)
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Terraform validate (bootstrap)
+        working-directory: ${{ env.TF_DIR }}/bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+        working-directory: ${{ env.TF_DIR }}
+
+      # soft_fail au démarrage ; passer à false une fois le rapport propre
+      - name: tfsec (IaC security scan)
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: ${{ env.TF_DIR }}
+          soft_fail: true
+
+      # --- Ansible
+      - name: Ansible lint
+        run: |
+          pip install --quiet ansible-core ansible-lint
+          cd ansible && ansible-lint .
+
+  # ------------------------------------------------------------------ Plan sur PR
+  plan:
+    name: Terraform plan (pull request)
+    if: github.event_name == 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init & plan
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.TF_LOCK_TABLE }}"
+          terraform plan -input=false -lock=false \
+            -var "image_tag=pr-plan" \
+            -var "git_ref=${{ github.sha }}" \
+            -var "git_repo_url=${{ github.server_url }}/${{ github.repository }}.git"
+
+  # ------------------------------------------------------------------ Build
+  build-and-push:
+    name: Docker build, Trivy scan & push to ECR
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        run: docker build --tag "$IMAGE" ./app
+
+      # Bloque le pipeline sur une vulnérabilité CRITIQUE pour laquelle un
+      # correctif existe. Le rapport complet est affiché dans les logs.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Fail on fixable CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # Tag immuable = SHA du commit (traçabilité totale, pas de "latest")
+      - name: Push image
+        run: docker push "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+
+  # ------------------------------------------------------------------ CD
+  deploy:
+    name: Terraform apply & rolling deployment
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # Environnement GitHub : on peut y ajouter une approbation manuelle
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ env.TF_LOCK_TABLE }}"
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform plan -input=false -out=tfplan \
+            -var "image_tag=${{ github.sha }}" \
+            -var "git_ref=${{ github.sha }}" \
+            -var "git_repo_url=${{ github.server_url }}/${{ github.repository }}.git"
+
+      # Les instances se (re)configurent seules via ansible-pull : un nouveau
+      # commit => nouvelle version du launch template => instance refresh.
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Read outputs
+        id: tf
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          echo "app_url=$(terraform output -raw app_url)" >> "$GITHUB_OUTPUT"
+          echo "asg_name=$(terraform output -raw asg_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the rolling instance refresh to finish
+        run: |
+          for i in $(seq 1 60); do
+            STATUS=$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "${{ steps.tf.outputs.asg_name }}" \
+              --max-records 1 --query 'InstanceRefreshes[0].Status' --output text)
+            echo "Instance refresh: $STATUS"
+            case "$STATUS" in
+              Successful|None) exit 0 ;;
+              Failed|Cancelled|RollbackInProgress|RollbackFailed|RollbackSuccessful) exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "Timeout waiting for the instance refresh" && exit 1
+
+      - name: Smoke test
+        run: |
+          URL="${{ steps.tf.outputs.app_url }}"
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/health" || true)
+            echo "GET $URL/health -> $CODE"
+            [ "$CODE" = "200" ] && { echo "Déploiement validé : $URL"; exit 0; }
+            sleep 10
+          done
+          exit 1
