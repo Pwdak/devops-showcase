@@ -102,6 +102,30 @@ git push origin main    # le pipeline fait le reste
 
 Ordre de grandeur de **3 à 5 USD par jour** quand l'infrastructure tourne (NAT Gateway, ALB, RDS Multi-AZ, 2 instances), à vérifier avec l'AWS Pricing Calculator. **Détruisez après chaque démo** (workflow `Destroy infrastructure`).
 
+## Retour d'expérience : difficultés rencontrées et résolutions
+
+Ce projet a été construit et débogué sur un vrai compte AWS. Voici les problèmes rencontrés, leur cause racine et la solution retenue.
+
+| # | Difficulté | Cause racine | Résolution |
+| :-: | :--- | :--- | :--- |
+| 1 | `make` introuvable sous Windows (PowerShell) | `make` n'est pas installé par défaut sous Windows | Exécution directe des commandes du `Makefile`, ou installation via `winget install GnuWin32.Make` |
+| 2 | `docker build` échoue : `failed to connect to the docker API` | Docker Desktop installé mais moteur arrêté (le client `docker` n'est qu'une interface) | Démarrer Docker Desktop, attendre « Engine running », vérifier avec `docker info` |
+| 3 | TFLint échoue (6 avertissements) | Les modules ne déclaraient ni `required_version` ni la version du provider AWS (règles « recommended ») | Ajout d'un `versions.tf` dans chaque module (`>= 1.5.0`, provider `~> 5.0`) |
+| 4 | `Unable to resolve action aquasecurity/trivy-action@0.28.0` | Les anciens tags de l'action ont été retirés après une attaque sur la chaîne d'approvisionnement ; les tags sont désormais préfixés par `v` | Passage à un tag valide (`@v0.36.0`). **Leçon :** épingler les actions par SHA de commit, un tag étant modifiable |
+| 5 | `Credentials could not be loaded` dans `configure-aws-credentials` | La variable GitHub `AWS_ROLE_ARN` n'existait pas : `role-to-assume` était vide | Création des variables de dépôt `AWS_ROLE_ARN` et `TF_STATE_BUCKET` (onglet *Variables*, pas *Secrets*, au niveau du dépôt) |
+| 6 | Région incohérente entre pipeline, Terraform et bootstrap | Région `ca-central-1` par défaut dans certains fichiers, `eu-west-1` dans d'autres | Alignement de la région partout (`AWS_REGION`, `aws_region`, `availability_zones`, bootstrap) |
+| 7 | `Not authorized to perform sts:AssumeRoleWithWebIdentity` alors que la politique de confiance semblait correcte | GitHub inclut désormais les identifiants **numériques** du propriétaire et du dépôt dans le `sub` OIDC : `repo:ORG@ID/REPO@ID:...` au lieu de `repo:ORG/REPO:...` | Diagnostic via l'événement **CloudTrail** `AssumeRoleWithWebIdentity` (il montre l'identité réellement reçue). Ajout des variables `github_owner_id` et `github_repo_id` au bootstrap |
+| 8 | `InvalidParameterValue: Invalid rule description` sur un Security Group | Les descriptions AWS n'acceptent ni apostrophes ni accents (jeu limité : `a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*`) | Description réécrite sans caractères spéciaux |
+| 9 | `FreeTierRestrictionError` à la création de RDS | Le plan gratuit AWS limite la rétention des sauvegardes (7 jours demandés) | Rétention rendue configurable (`db_backup_retention_days`) et/ou passage au plan payant ; ajuster `db_multi_az` si d'autres limites apparaissent |
+
+### Enseignements
+
+- **Lire la source de vérité :** quand un message d'erreur est vague (OIDC), CloudTrail et les journaux de debug montrent ce qui est réellement envoyé, plutôt que ce que l'on croit envoyer.
+- **Un apply partiel n'est pas une catastrophe :** l'état distant (S3 + DynamoDB) enregistre ce qui a été créé ; la relance reprend là où elle s'est arrêtée.
+- **Épingler par SHA** les actions GitHub tierces, et toujours vérifier une version dans les notes de publication plutôt que de la recopier de mémoire.
+- **Valider tôt :** `fmt`, `validate`, TFLint et tfsec détectent les erreurs avant de dépenser du temps (et de l'argent) sur AWS.
+- **Maîtriser les coûts :** détruire l'infrastructure après chaque session (workflow `Destroy infrastructure`) et configurer une alerte de budget.
+
 ## Améliorations envisagées
 
 - Une NAT Gateway par AZ (ici une seule, pour limiter les coûts : point de défaillance unique assumé).
